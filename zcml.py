@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 import argparse
 import os
 import sys
@@ -16,19 +16,6 @@ CONDITION = ZCML + 'condition'
 def parse_xml(filename):
     with open(filename) as f:
         return ET.parse(f)
-
-
-ENTER = 'ENTER'
-LEAVE = 'LEAVE'
-
-def walk(node, tags):
-    if node.tag in tags:
-        yield ENTER, node
-    for child_node in node:
-        for event in walk(child_node, tags):
-            yield event
-    if node.tag in tags:
-        yield LEAVE, node
 
 
 def resolve_package(package, relative_to):
@@ -59,7 +46,7 @@ def resolve(package, filename):
     return os.path.join(location, filename)
 
 
-def print_zcml_include_tree(package, filename, level=0, seen=None,
+def print_zcml_include_tree(package, filename, conditions=(), level=0, seen=None,
                             show_full_filenames=False, show_seen=False):
     if seen is None:
         seen = set()
@@ -67,6 +54,8 @@ def print_zcml_include_tree(package, filename, level=0, seen=None,
     if package:
         prefix += package + ':'
     prefix += filename
+    if conditions:
+        prefix += ' [conditional on %s]' % ' and '.join(conditions)
     try:
         full_filename = resolve(package, filename)
     except ValueError:
@@ -74,6 +63,8 @@ def print_zcml_include_tree(package, filename, level=0, seen=None,
         return
     if show_full_filenames:
         prefix = '  ' * level + full_filename
+        if conditions:
+            prefix += ' [conditional on %s]' % ' and '.join(conditions)
     if full_filename in seen:
         if show_seen:
             print('%s [seen]' % prefix)
@@ -81,22 +72,21 @@ def print_zcml_include_tree(package, filename, level=0, seen=None,
     print(prefix)
     seen.add(full_filename)
     tree = parse_xml(full_filename)
-    package_stack = [(package, ())]
-    for event, node in walk(tree.getroot(), (CONFIGURE, INCLUDE)):
-        if (event, node.tag) == (ENTER, CONFIGURE):
+    def walk(node, package, conditions=()):
+        if node.tag in (CONFIGURE, INCLUDE):
             condition = node.get(CONDITION)
-            package = resolve_package(node.get('package'), package_stack[-1][0])
-            package_stack.append((package, condition))
-        elif (event, node.tag) == (LEAVE, CONFIGURE):
-            del package_stack[-1]
-            package, condition = package_stack[-1]
-        elif (event, node.tag) == (ENTER, INCLUDE):
-            condition = node.get(CONDITION)
-            package = resolve_package(node.get('package'), package_stack[-1][0])
+            if condition:
+                conditions += (condition,)
+            package = resolve_package(node.get('package'), package)
+        if node.tag == INCLUDE:
             filename = node.get('file') or 'configure.zcml'
-            print_zcml_include_tree(package, filename, level + 1, seen,
+            print_zcml_include_tree(package, filename, conditions,
+                                    level + 1, seen,
                                     show_full_filenames=show_full_filenames,
                                     show_seen=show_seen)
+        for child in node:
+            walk(child, package, conditions)
+    walk(tree.getroot(), package)
 
 
 def main():
